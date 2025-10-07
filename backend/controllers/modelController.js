@@ -148,7 +148,9 @@ export const uploadModel = async (req, res) => {
 export const listModels = async (req, res) => {
   try {
     const search = req.query.search || null;
-    const rows = await getLatestVersionsList(search);
+    // return only models owned by the authenticated user
+    const ownerId = req.user;
+    const rows = await getLatestVersionsList(search, ownerId);
     return res.json(rows);
   } catch (err) {
     console.error(err);

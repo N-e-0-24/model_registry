@@ -31,7 +31,7 @@ export const deactivateOtherVersions = async (modelId, trxClient) => {
   }
 };
 
-export const getLatestVersionsList = async (search) => {
+export const getLatestVersionsList = async (search, ownerId = null) => {
   // We return the active version for each model (join)
   // allow optional name search (case-insensitive)
   const baseQuery = `
@@ -43,8 +43,13 @@ export const getLatestVersionsList = async (search) => {
   const params = [];
   let q = baseQuery;
   if (search) {
-    q += ' AND LOWER(m.name) LIKE $1';
+    q += ' AND LOWER(m.name) LIKE $' + (params.length + 1);
     params.push(`%${search.toLowerCase()}%`);
+  }
+
+  if (ownerId) {
+    q += ' AND m.owner_id = $' + (params.length + 1);
+    params.push(ownerId);
   }
   q += ' ORDER BY v.upload_date DESC';
   const res = await pool.query(q, params);
