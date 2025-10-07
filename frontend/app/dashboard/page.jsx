@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import axios from "axios";
+import api, { endpoints } from "../../lib/api";
+import { fetchModels, uploadNewVersion } from "../../lib/models";
+import { useToast } from "../../components/ToastProvider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -16,6 +19,8 @@ export default function Dashboard() {
   const [description, setDescription] = useState("");
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const { addToast } = useToast();
   const [user, setUser] = useState(null);
   const [environment, setEnvironment] = useState(""); // Add this line
   const [filterTag, setFilterTag] = useState("all");
@@ -32,22 +37,21 @@ export default function Dashboard() {
     // Fetch user data (you might want to get this from your API)
     const fetchUserAndModels = async () => {
       try {
-        const [modelsRes] = await Promise.all([
-          axios.get("http://localhost:3001/api/models", {
-            headers: { Authorization: `Bearer ${token}` },
-          }),
-        ]);
-        setModels(modelsRes.data);
-        
-        // Extract user info from token or set default
+        setInitialLoading(true);
+        const data = await fetchModels();
+        setModels(data);
         setUser({ name: "User", email: "user@example.com" });
       } catch (err) {
         if (err.response?.status === 401) {
           localStorage.removeItem("token");
           router.push("/login");
         } else {
-          setError(err.response?.data?.message || "Failed to fetch data");
+          const msg = err.response?.data?.message || "Failed to fetch data";
+          setError(msg);
+          addToast(msg, "error");
         }
+      } finally {
+        setInitialLoading(false);
       }
     };
 
@@ -65,9 +69,11 @@ export default function Dashboard() {
   // 🔹 Handle upload new version
   const handleUpload = async (e) => {
     e.preventDefault();
-    if (!file || !newVersion || !environment) return alert("Version, environment and file are required!");
+    if (!file || !newVersion || !environment) return addToast("Version, environment and file are required!", "error");
 
-    const token = localStorage.getItem("token");
+    // basic validation
+    if (!/^\d+\.\d+\.\d+$/.test(newVersion)) return addToast("Version must be x.y.z", "error");
+
     const formData = new FormData();
     formData.append("version", newVersion);
     formData.append("description", description);
@@ -76,18 +82,11 @@ export default function Dashboard() {
 
     try {
       setLoading(true);
-      await axios.post(
-        `http://localhost:3001/api/models/${selectedModel.model_id}/new-version`,
-        formData,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      await uploadNewVersion(selectedModel.model_id, formData, (evt) => {
+        // could set a per-upload progress state here
+      });
 
-      alert("New version uploaded successfully!");
+      addToast("New version uploaded successfully!", "success");
       setShowModal(false);
       setFile(null);
       setDescription("");
@@ -95,12 +94,11 @@ export default function Dashboard() {
       setEnvironment(""); // Reset environment
 
       // Refresh model list
-      const res = await axios.get("http://localhost:3001/api/models", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setModels(res.data);
+      const data = await fetchModels();
+      setModels(data);
     } catch (err) {
-      alert(err.response?.data?.message || "Upload failed");
+      const msg = err.response?.data?.message || "Upload failed";
+      addToast(msg, "error");
     } finally {
       setLoading(false);
     }
@@ -191,7 +189,13 @@ export default function Dashboard() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {initialLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            <p className="ml-4 text-gray-600">Loading models...</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
             <div className="flex items-center justify-between">
               <div>
@@ -273,7 +277,8 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        </div>
+          </div>
+        )}
 
         {/* Search and Actions Bar */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6 border border-gray-100">

@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import axios from "axios";
+import api, { endpoints } from "../../lib/api";
+import { useToast } from "../../components/ToastProvider";
 import { useRouter } from "next/navigation";
 
 export default function Login() {
@@ -12,6 +14,7 @@ export default function Login() {
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const { addToast } = useToast();
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -23,19 +26,21 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await axios.post("http://localhost:3001/api/auth/login", formData, {
-        headers: { "Content-Type": "application/json" },
-      });
+      const res = await api.post(endpoints.auth.login, formData);
 
       if (res.data?.token) {
         localStorage.setItem("token", res.data.token);
+        addToast("Login successful", "success");
         router.push("/dashboard");
       } else {
+        addToast("Login succeeded but no token received.", "error");
         setError("Login succeeded but no token received.");
       }
     } catch (err) {
       console.error("Login error:", err);
-      setError(err.response?.data?.message || "Login failed");
+      const msg = err.response?.data?.message || "Login failed";
+      addToast(msg, "error");
+      setError(msg);
     } finally {
       setLoading(false);
     }

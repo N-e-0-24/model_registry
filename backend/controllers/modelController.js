@@ -46,30 +46,29 @@ export const addNewVersion = async (req, res) => {
     );
     if (exists.rowCount > 0) {
       await client.query('ROLLBACK');
-      fs.unlinkSync(req.file.path);
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
       return res.status(400).json({ message: 'This version already exists' });
     }
 
-    // Deactivate all current active versions
-    await client.query('UPDATE model_versions SET is_active = false WHERE model_id = $1', [modelId]);
-
-    // Insert new version
-    const versionRes = await client.query(
+    // Use transactional helper to deactivate others and insert/activate new version
+    const insertRes = await client.query(
       `INSERT INTO model_versions (model_id, version, description, file_path, uploaded_by, tags, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5, $6, true) RETURNING *`,
       [modelId, version, description || null, req.file.path, ownerId, tags || null]
     );
+
+    // Deactivate others (ensure single active)
+    await client.query('UPDATE model_versions SET is_active = false WHERE model_id = $1 AND id != $2', [modelId, insertRes.rows[0].id]);
 
     // Add activity log
     await client.query(
       `INSERT INTO activity_logs (user_id, model_id, version_id, action, message)
        VALUES ($1, $2, $3, $4, $5)`,
-      [ownerId, modelId, versionRes.rows[0].id, 'new-version', `Added version ${version}`]
+      [ownerId, modelId, insertRes.rows[0].id, 'new-version', `Added version ${version}`]
     );
 
     await client.query('COMMIT');
-    res.status(201).json({ message: 'New version uploaded successfully', version: versionRes.rows[0] });
+    res.status(201).json({ message: 'New version uploaded successfully', version: insertRes.rows[0] });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Error adding new version:', err);
@@ -106,13 +105,10 @@ export const uploadModel = async (req, res) => {
       );
       if (exists.rowCount > 0) {
         // clean up uploaded file
-        fs.unlinkSync(req.file.path);
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         await client.query('ROLLBACK');
         return res.status(400).json({ message: 'This version already exists for the model' });
       }
-
-      // deactivate existing active versions for this model
-      await client.query('UPDATE model_versions SET is_active = false WHERE model_id = $1', [model.id]);
 
       // insert new version
       const insertRes = await client.query(
@@ -120,6 +116,9 @@ export const uploadModel = async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
         [model.id, version, description || null, req.file.path, ownerId, tags || null, true]
       );
+
+      // Deactivate others (ensure single active)
+      await client.query('UPDATE model_versions SET is_active = false WHERE model_id = $1 AND id != $2', [model.id, insertRes.rows[0].id]);
 
       // optional: record activity log
       await client.query(
@@ -189,8 +188,8 @@ export const rollbackVersion = async (req, res) => {
     const ownerId = modelRes.rows[0].owner_id;
     if (ownerId !== req.user) return res.status(403).json({ message: 'Not authorized' });
 
-    // perform transaction to set active
-    const result = await setActiveVersionTransaction(versionId);
+    // perform transaction to set active (use helper that takes version id)
+    const result = await setActiveVersionByIdTransaction(versionId);
 
     if (!result.ok) return res.status(400).json({ message: result.message });
 
@@ -213,10 +212,23 @@ export const downloadVersionFile = async (req, res) => {
     const version = await getVersionById(versionId);
     if (!version) return res.status(404).json({ message: 'Version not found' });
 
+    // Confirm requester is owner of the model (or has explicit permission)
+    const model = await getModelById(version.model_id);
+    if (!model) return res.status(404).json({ message: 'Model not found' });
+    if (model.owner_id !== req.user) {
+      return res.status(403).json({ message: 'Not authorized to download this file' });
+    }
+
     const filePath = version.file_path;
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ message: 'File not found' });
     }
+
+    // log the download action
+    await pool.query(
+      'INSERT INTO activity_logs (user_id, model_id, version_id, action, message) VALUES ($1,$2,$3,$4,$5)',
+      [req.user, version.model_id, versionId, 'download', `Downloaded version ${version.version}`]
+    );
 
     const filename = path.basename(filePath);
     return res.download(filePath, filename);

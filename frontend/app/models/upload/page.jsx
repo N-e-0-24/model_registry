@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import axios from "axios";
+import api, { endpoints } from "../../../lib/api";
 import { useRouter } from "next/navigation";
 
 export default function UploadModel() {
@@ -35,9 +35,9 @@ export default function UploadModel() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem("token");
-      const res = await axios.post("http://localhost:3001/api/models/upload", data, {
-        headers: { Authorization: `Bearer ${token}` },
+      // api will attach Authorization header automatically via interceptor
+      const res = await api.post(endpoints.models.upload, data, {
+        headers: { "Content-Type": "multipart/form-data" },
       });
       alert("Model uploaded successfully!");
       router.push("/dashboard"); // Redirect to dashboard after success

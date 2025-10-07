@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import axios from "axios";
+import api, { endpoints } from "../../../../lib/api";
+import { fetchModel as fetchModelApi, fetchLogs, rollbackVersion, downloadModel as downloadModelApi } from "../../../../lib/models";
+import { useToast } from "../../../../components/ToastProvider";
 
 export default function ModelDetail() {
   const { id } = useParams();
@@ -10,34 +13,42 @@ export default function ModelDetail() {
   const [model, setModel] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [user, setUser] = useState(null);
   const [showActivityLogs, setShowActivityLogs] = useState(false);
   const [activityLogs, setActivityLogs] = useState([]);
   const [activityLogsLoading, setActivityLogsLoading] = useState(false);
+  const { addToast } = useToast();
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
   const fetchModel = async () => {
     try {
-      const res = await axios.get(`http://localhost:3001/api/models/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setModel(res.data);
+      setInitialLoading(true);
+      const data = await fetchModelApi(id);
+      setModel(data);
+
+      // warn if multiple active versions
+      const activeCount = (data.versions || []).filter((v) => v.is_active).length;
+      if (activeCount > 1) addToast("Warning: multiple active versions detected for this model", "error");
     } catch (err) {
-      setError(err.response?.data?.message || "Failed to fetch model");
+      const msg = err.response?.data?.message || "Failed to fetch model";
+      setError(msg);
+      addToast(msg, "error");
+    } finally {
+      setInitialLoading(false);
     }
   };
 
   const fetchActivityLogs = async () => {
     try {
       setActivityLogsLoading(true);
-      const res = await axios.get(`http://localhost:3001/api/models/${id}/logs`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setActivityLogs(res.data.data || []);
+      const res = await fetchLogs(id);
+      setActivityLogs(res.data || res || []);
     } catch (err) {
       console.error("Failed to fetch activity logs:", err);
+      addToast("Failed to load activity logs", "error");
       setActivityLogs([]);
     } finally {
       setActivityLogsLoading(false);
@@ -55,23 +66,45 @@ export default function ModelDetail() {
     fetchModel();
   }, [id, router, token]);
 
-  const handleDownload = () => {
-    window.open(`http://localhost:3001/api/models/download/${id}`, "_blank");
-  };
+ const handleDownload = async () => {
+  try {
+    const res = await downloadModelApi(id);
+
+    // Create a blob link to trigger the browser download
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const link = document.createElement("a");
+    link.href = url;
+
+    // Optional: backend can send filename in headers
+    const contentDisposition = res.headers["content-disposition"];
+    let filename = "downloaded_file";
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="?([^"]+)"?/);
+      if (match && match[1]) filename = match[1];
+    }
+
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    console.error("File download failed:", error);
+    addToast("File download failed", "error");
+  }
+};
+
 
   const handleRollback = async (versionId) => {
     setLoading(true);
     setMessage("");
     try {
-      const res = await axios.post(
-        `http://localhost:3001/api/models/${id}/rollback`,
-        { versionId },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      setMessage(res.data.message || "Rollback successful");
+      const res = await rollbackVersion(id, versionId);
+      addToast(res.message || "Rollback successful", "success");
       await fetchModel(); // refresh model data to reflect new active version
     } catch (err) {
-      setError(err.response?.data?.message || "Rollback failed");
+      const msg = err.response?.data?.message || "Rollback failed";
+      setError(msg);
+      addToast(msg, "error");
     } finally {
       setLoading(false);
     }

@@ -69,6 +69,44 @@ export const getVersionById = async (versionId) => {
   return res.rows[0];
 };
 
+// Get model by id
+export const getModelById = async (modelId) => {
+  const res = await pool.query('SELECT * FROM models WHERE id = $1', [modelId]);
+  return res.rows[0];
+};
+
+// Transaction helper to set a specific version active (by version id)
+export const setActiveVersionByIdTransaction = async (versionId) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // fetch version and model id
+    const vRes = await client.query('SELECT id, model_id FROM model_versions WHERE id = $1 FOR UPDATE', [versionId]);
+    if (vRes.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return { ok: false, message: 'Version not found' };
+    }
+
+    const modelId = vRes.rows[0].model_id;
+
+    // deactivate other versions for this model
+    await client.query('UPDATE model_versions SET is_active = false WHERE model_id = $1', [modelId]);
+
+    // activate the requested version
+    await client.query('UPDATE model_versions SET is_active = true WHERE id = $1', [versionId]);
+
+    await client.query('COMMIT');
+    return { ok: true, message: 'Version activated' };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('setActiveVersionByIdTransaction failed', err);
+    return { ok: false, message: 'Error activating version', error: err };
+  } finally {
+    client.release();
+  }
+};
+
 export const setActiveVersionTransaction = async (modelId) => {
   const client = await pool.connect();
   try {

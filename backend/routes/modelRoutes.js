@@ -19,7 +19,7 @@ router.get('/:modelId', protect, getModelDetail);
 router.post('/:modelId/rollback', protect, rollbackVersion);
 
 // Download a specific version (public? or protected)
-router.get('/download/:versionId',  downloadVersionFile);
+router.get('/download/:versionId', protect, downloadVersionFile);
 
 
 router.post('/:modelId/new-version', protect, upload.single('file'), addNewVersion);
