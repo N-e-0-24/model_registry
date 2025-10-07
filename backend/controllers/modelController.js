@@ -1,7 +1,7 @@
 import { pool } from '../config/db.js';
 import { createModel, getActivityLogs } from '../model/modelRegistryModel.js';
 import { getModelWithVersions } from '../model/modelRegistryModel.js';
-import { setActiveVersionTransaction } from '../model/modelRegistryModel.js';
+import { setActiveVersionTransaction, setActiveVersionByIdTransaction } from '../model/modelRegistryModel.js';
 import { getVersionById } from '../model/modelRegistryModel.js';
 import { getLatestVersionsList } from '../model/modelRegistryModel.js';
 import {
@@ -191,7 +191,7 @@ export const rollbackVersion = async (req, res) => {
     if (ownerId !== req.user) return res.status(403).json({ message: 'Not authorized' });
 
     // perform transaction to set active (use helper that takes version id)
-    const result = await setActiveVersionByIdTransaction(versionId);
+    const result = await setActiveVersionTransaction(versionId);
 
     if (!result.ok) return res.status(400).json({ message: result.message });
 
@@ -211,31 +211,46 @@ export const rollbackVersion = async (req, res) => {
 export const downloadVersionFile = async (req, res) => {
   try {
     const { versionId } = req.params;
+
+    // 1. Fetch the version
     const version = await getVersionById(versionId);
     if (!version) return res.status(404).json({ message: 'Version not found' });
 
-    // Confirm requester is owner of the model (or has explicit permission)
-    const model = await getModelById(version.model_id);
-    if (!model) return res.status(404).json({ message: 'Model not found' });
-    if (model.owner_id !== req.user) {
+    // 2. Fetch model ownership directly from DB (without getModelById)
+    const modelResult = await pool.query(
+      'SELECT owner_id FROM models WHERE id = $1',
+      [version.model_id]
+    );
+
+    if (modelResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Model not found' });
+    }
+
+    const modelOwnerId = modelResult.rows[0].owner_id;
+
+    // 3. Check if requester is authorized
+    if (modelOwnerId !== req.user) {
       return res.status(403).json({ message: 'Not authorized to download this file' });
     }
 
+    // 4. Validate file existence
     const filePath = version.file_path;
     if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ message: 'File not found' });
     }
 
-    // log the download action
+    // 5. Log the download activity
     await pool.query(
-      'INSERT INTO activity_logs (user_id, model_id, version_id, action, message) VALUES ($1,$2,$3,$4,$5)',
+      'INSERT INTO activity_logs (user_id, model_id, version_id, action, message) VALUES ($1, $2, $3, $4, $5)',
       [req.user, version.model_id, versionId, 'download', `Downloaded version ${version.version}`]
     );
 
+    // 6. Send file for download
     const filename = path.basename(filePath);
     return res.download(filePath, filename);
+
   } catch (err) {
-    console.error(err);
+    console.error('Error downloading version file:', err);
     return res.status(500).json({ message: 'Server error' });
   }
 };
